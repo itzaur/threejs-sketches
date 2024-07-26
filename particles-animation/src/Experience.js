@@ -11,6 +11,12 @@ export default class Experience {
     this.height = container.offsetHeight;
     this.mouse = new THREE.Vector2();
     this.gui = new dat.GUI();
+    this.parameters = {
+      count: 1000,
+    };
+    this.points = null;
+    this.geometry = null;
+    this.material = null;
 
     this.resize = () => this.onResize();
     this.mousemove = (e) => this.onMousemovee(e);
@@ -45,13 +51,13 @@ export default class Experience {
       0.1,
       100
     );
-    this.camera.position.set(2, 2, 2);
+    this.camera.position.set(0, 0, 2);
   }
 
   createRenderer() {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setSize(this.width, this.height);
-    this.renderer.setPixelRatio(Math.max(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
     this.container.appendChild(this.renderer.domElement);
   }
@@ -71,7 +77,13 @@ export default class Experience {
   }
 
   createMesh() {
-    this.geometry = new THREE.PlaneGeometry(2, 2);
+    if (this.points !== null) {
+      this.geometry.dispose();
+      this.material.dispose();
+      this.scene.remove(this.points);
+    }
+
+    this.geometry = new THREE.BufferGeometry();
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
@@ -79,11 +91,28 @@ export default class Experience {
       vertexShader,
       fragmentShader,
       side: 2,
+      depthWrite: false,
+      transparent: true,
     });
 
-    this.mesh = new THREE.Mesh(this.geometry, this.material);
+    const positions = new Float32Array(this.parameters.count * 3);
 
-    this.scene.add(this.mesh);
+    for (let i = 0; i < this.parameters.count; i++) {
+      const i3 = i * 3;
+
+      positions[i3] = (Math.random() - 0.5) * 5;
+      positions[i3 + 1] = (Math.random() - 0.5) * 5;
+      positions[i3 + 2] = (Math.random() - 0.5) * 5;
+    }
+
+    this.geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(positions, 3)
+    );
+
+    this.points = new THREE.Points(this.geometry, this.material);
+
+    this.scene.add(this.points);
   }
 
   render() {
@@ -110,7 +139,7 @@ export default class Experience {
     this.camera.updateProjectionMatrix();
 
     this.renderer.setSize(this.width, this.height);
-    this.renderer.setPixelRatio(Math.max(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   }
 
   onMousemovee(e) {
@@ -120,5 +149,15 @@ export default class Experience {
     this.mouse.set(x, y);
   }
 
-  addGUI() {}
+  addGUI() {
+    this.gui
+      .add(this.parameters, 'count')
+      .min(0)
+      .max(10000)
+      .step(100)
+      .name('count')
+      .onFinishChange(() => {
+        this.createMesh();
+      });
+  }
 }
