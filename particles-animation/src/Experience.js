@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/Addons.js';
+import { GPUComputationRenderer } from 'three/examples/jsm/misc/GPUComputationRenderer';
 import * as dat from 'lil-gui';
 import vertexShader from './shaders/vertexShader.glsl';
 import fragmentShader from './shaders/fragmentShader.glsl';
+import fragmentShaderPosition from './shaders/fragmentShaderPosition.glsl';
+import fragmentShaderVelocity from './shaders/fragmentShaderVelocity.glsl';
 
 export default class Experience {
   constructor(container) {
@@ -12,11 +15,20 @@ export default class Experience {
     this.mouse = new THREE.Vector2();
     this.gui = new dat.GUI();
     this.parameters = {
+      GPGPUParticlesCount: 32,
       count: 1000,
+      size: 0.05,
     };
+    this.parameters.textureWidth = this.parameters.GPGPUParticlesCount ** 2;
+
     this.points = null;
     this.geometry = null;
     this.material = null;
+    this.gpuCompute = null;
+    this.positionUniforms = null;
+    this.velocityUniforms = null;
+    this.positionVariable = null;
+    this.velocityVariable = null;
 
     this.resize = () => this.onResize();
     this.mousemove = (e) => this.onMousemovee(e);
@@ -30,6 +42,7 @@ export default class Experience {
     this.createControls();
     this.createClock();
     this.createMesh();
+    this.initGPU();
     this.addGUI();
 
     this.addListeners();
@@ -87,6 +100,10 @@ export default class Experience {
     this.material = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
+        uSize: { value: this.parameters.size },
+        uResolution: { value: new THREE.Vector2(this.width, this.height) },
+        uPositions: { value: null },
+        uVelocity: { value: null },
       },
       vertexShader,
       fragmentShader,
@@ -95,14 +112,22 @@ export default class Experience {
       transparent: true,
     });
 
-    const positions = new Float32Array(this.parameters.count * 3);
+    const positions = new Float32Array(this.parameters.GPGPUParticlesCount * 3);
+    const reference = new Float32Array(this.parameters.GPGPUParticlesCount * 2);
 
-    for (let i = 0; i < this.parameters.count; i++) {
+    for (let i = 0; i < this.parameters.GPGPUParticlesCount; i++) {
       const i3 = i * 3;
 
       positions[i3] = (Math.random() - 0.5) * 5;
       positions[i3 + 1] = (Math.random() - 0.5) * 5;
       positions[i3 + 2] = (Math.random() - 0.5) * 5;
+
+      reference[i * 2] =
+        (i % this.parameters.GPGPUParticlesCount) /
+        this.parameters.GPGPUParticlesCount;
+      reference[i * 2 + 1] =
+        Math.floor(i / this.parameters.GPGPUParticlesCount) /
+        this.parameters.GPGPUParticlesCount;
     }
 
     this.geometry.setAttribute(
@@ -110,9 +135,90 @@ export default class Experience {
       new THREE.BufferAttribute(positions, 3)
     );
 
+    this.geometry.setAttribute(
+      'reference',
+      new THREE.BufferAttribute(reference, 2)
+    );
+
     this.points = new THREE.Points(this.geometry, this.material);
 
     this.scene.add(this.points);
+  }
+
+  initGPU() {
+    if (this.gpuCompute !== null) {
+      this.gpuCompute.dispose();
+    }
+
+    this.gpuCompute = new GPUComputationRenderer(
+      this.parameters.GPGPUParticlesCount,
+      this.parameters.GPGPUParticlesCount,
+      this.renderer
+    );
+
+    const dtPosition = this.gpuCompute.createTexture();
+    const dtVelocity = this.gpuCompute.createTexture();
+    this.fillPositionTexture(dtPosition);
+    this.fillVelocityTexture(dtVelocity);
+
+    this.velocityVariable = this.gpuCompute.addVariable(
+      'textureVelocity',
+      fragmentShaderVelocity,
+      dtVelocity
+    );
+    this.positionVariable = this.gpuCompute.addVariable(
+      'texturePosition',
+      fragmentShaderPosition,
+      dtPosition
+    );
+
+    this.gpuCompute.setVariableDependencies(this.velocityVariable, [
+      this.positionVariable,
+      this.velocityVariable,
+    ]);
+    this.gpuCompute.setVariableDependencies(this.positionVariable, [
+      this.positionVariable,
+      this.velocityVariable,
+    ]);
+
+    this.positionUniforms = this.positionVariable.material.uniforms;
+    this.velocityUniforms = this.velocityVariable.material.uniforms;
+
+    this.positionUniforms['time'] = { value: 0.0 };
+    this.velocityUniforms['time'] = { value: 1.0 };
+
+    this.velocityVariable.wrapS = THREE.RepeatWrapping;
+    this.velocityVariable.wrapT = THREE.RepeatWrapping;
+    this.positionVariable.wrapS = THREE.RepeatWrapping;
+    this.positionVariable.wrapT = THREE.RepeatWrapping;
+
+    this.gpuCompute.init();
+  }
+
+  fillPositionTexture(texture) {
+    const theArray = texture.image.data;
+
+    for (let k = 0, kl = theArray.length; k < kl; k += 4) {
+      theArray[k + 0] = (Math.random() - 0.5) * 2;
+      theArray[k + 1] = (Math.random() - 0.5) * 2;
+      theArray[k + 2] = (Math.random() - 0.5) * 2;
+      theArray[k + 3] = 1;
+    }
+  }
+
+  fillVelocityTexture(texture) {
+    const theArray = texture.image.data;
+
+    for (let k = 0, kl = theArray.length; k < kl; k += 4) {
+      const x = Math.random() - 0.5;
+      const y = Math.random() - 0.5;
+      const z = Math.random() - 0.5;
+
+      theArray[k + 0] = x * 0.01;
+      theArray[k + 1] = y * 0.01;
+      theArray[k + 2] = z * 0.01;
+      theArray[k + 3] = 1;
+    }
   }
 
   render() {
@@ -120,6 +226,16 @@ export default class Experience {
     const elapsedTime = this.clock.getElapsedTime();
 
     this.material.uniforms.uTime.value = elapsedTime;
+
+    this.positionUniforms['time'].value = elapsedTime;
+    this.velocityUniforms['time'].value = elapsedTime;
+
+    this.material.uniforms.uPositions.value =
+      this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
+    this.material.uniforms.uVelocity.value =
+      this.gpuCompute.getCurrentRenderTarget(this.velocityVariable).texture;
+
+    this.gpuCompute.compute();
   }
 
   update() {
@@ -151,11 +267,22 @@ export default class Experience {
 
   addGUI() {
     this.gui
-      .add(this.parameters, 'count')
-      .min(0)
+      .add(this.parameters, 'GPGPUParticlesCount')
+      .min(32)
       .max(10000)
       .step(100)
-      .name('count')
+      .name('Count')
+      .onFinishChange(() => {
+        this.createMesh();
+        this.initGPU();
+      });
+
+    this.gui
+      .add(this.parameters, 'size')
+      .min(0.01)
+      .max(0.5)
+      .step(0.01)
+      .name('Particles Size')
       .onFinishChange(() => {
         this.createMesh();
       });
