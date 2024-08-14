@@ -1,10 +1,15 @@
-uniform float uTime;
+uniform sampler2D uTarget;
 
 void main() {
     vec2 uv = gl_FragCoord.xy / resolution.xy;
 
-    vec3 position = texture2D(texturePosition, uv).xyz;
-    vec3 velocity = texture2D(textureVelocity, uv).xyz;
+    vec4 position = texture2D(texturePosition, uv);
+    vec4 velocity = texture2D(textureVelocity, uv);
 
-    gl_FragColor = vec4(velocity, 1.0);
+    vec4 target = texture2D(uTarget, uv);
+
+    velocity *= 0.8;
+    velocity += (target - position) * 2.0;
+
+    gl_FragColor = vec4(velocity);
 }
